@@ -1,4 +1,6 @@
-use crossterm::event::{self, Event};
+mod blackjack;
+
+use crossterm::event::{self, Event, KeyCode};
 use ratatui::{
     layout::{Constraint, Layout},
     widgets::Block,
@@ -16,6 +18,7 @@ fn main() {
         }
     }
     ratatui::restore();
+    blackjack::test();
 }
 
 
