@@ -1,13 +1,38 @@
 mod blackjack;
 
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
-    layout::{Constraint, Layout},
-    widgets::Block,
+    layout::{Constraint, Layout, Alignment},
+    widgets::{Block, Paragraph, Borders, List, ListItem},
     Frame,
     prelude::Margin,
+    style::{Style, Color, Modifier},
+    text::{Span, Line},
 };
+use blackjack::{Game, GameState};
+use std::io;
 
+struct App {
+    game: Game,
+    game_state: GameState,
+    current_player: usize,
+    message: String,
+    show_dealer_cards: bool,
+}
+
+impl App{
+    fn new() -> Self {
+        let mut game = Game::new();
+        game.deck.shuffle();
+        Self {
+            game,
+            game_state: GameState::Setup,
+            current_player: 0,
+            message: "Appuyez sur 'n' pour commencer".to_string(),
+            show_dealer_cards: false,
+        }
+    }
+}
 
 fn main() {
     let mut terminal = ratatui::init();

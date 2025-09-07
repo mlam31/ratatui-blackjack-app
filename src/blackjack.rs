@@ -4,11 +4,19 @@ use std::{io::{self, Write}, ops::Index};
 use crossterm::event::{read, Event, KeyCode, KeyEventKind};
 use std::{thread, time};
 
+#[derive(Debug, PartialEq)]
+pub enum GameState {
+    Setup,
+    Betting,
+    Playing,
+    DealerTurn,
+    GameOver,
+}
 
 #[derive(Debug, Clone)]
-struct Card {
-    value: Value,
-    color: Color,
+pub struct Card {
+    pub value: Value,
+    pub color: Color,
 }
 
 impl Card {
@@ -16,24 +24,24 @@ impl Card {
         Self { value, color }
     }
 
-    fn value(&self) -> &Value {
+    pub fn value(&self) -> &Value {
         &self.value
     }
 
-    fn color(&self) -> &Color {
+    pub fn color(&self) -> &Color {
         &self.color
     }
 }
 
 #[derive(Debug, Clone)]
-enum Color {
+pub enum Color {
     Hearts,
     Diamonds,
     Clubs,
     Spades,
 }
 #[derive(Debug, Clone, PartialEq)]
-enum Value {
+pub enum Value {
     Ace,
     Two,
     Three,
@@ -50,7 +58,7 @@ enum Value {
 }
 
 impl Value {
-    fn to_int(self) -> u8 {
+    pub fn to_int(self) -> u8 {
         match self {
             Self::Ace => 1,
             Self::Two => 2,
@@ -99,7 +107,7 @@ impl Deck {
         deck
     }
 
-    fn shuffle(&mut self) {
+    pub fn shuffle(&mut self) {
         println!("Mélange du deck...");
         let mut rng = thread_rng();
         self.cards.shuffle(&mut rng);
@@ -117,11 +125,15 @@ impl Deck {
 }
 
 #[derive(Debug, Clone)]
-struct Hand {
-    cards: Vec<Card>,
+pub struct Hand {
+    pub cards: Vec<Card>,
 }
 
 impl Hand {
+    pub fn cards(&self) -> &Vec<Card> {
+        &self.cards
+    }
+
     fn new() -> Self {
         Self { cards: Vec::new() }
     }
@@ -130,13 +142,13 @@ impl Hand {
         self.cards.push(card);
     }
 
-    fn hit_cards(&mut self, deck: &mut Deck) {
+    pub fn hit_cards(&mut self, deck: &mut Deck) {
         if let Some(card) = deck.draw() {
             self.add_card(card);
         }
     }
 
-    fn value(&self) -> u8 {
+    pub fn value(&self) -> u8 {
         let mut somme = self.cards.iter().map(|c| c.value.clone().to_int()).sum();
         let number_of_aces = self.cards.iter().filter(|c| c.value == Value::Ace).count();
         if somme <= 11 && number_of_aces > 0 { // Si la somme est inférieure ou égale à 11 et qu'il y a des As
@@ -229,7 +241,11 @@ impl Game {
         Self { deck, players, dealer, counter }
     }
 
-    fn deal_cards(&mut self) {
+    pub fn deal_cards(&mut self) {
+        // Nettoyage les mains précédentes
+        for player in &mut self.players {
+            player.hand.clear();
+        }
         println!("\nDistribution des cartes...\n");
         for _ in 0..2 {
             for player in &mut self.players {
@@ -314,7 +330,7 @@ impl Game {
         }
     }
 
-    fn dealer_turn(&mut self){
+    pub fn dealer_turn(&mut self){
         println!("\n\nMain du dealer:");
         self.dealer.hand.show_value();
         loop {
@@ -360,12 +376,21 @@ impl Game {
         self.dealer.hand.clear();
     }
 
+    pub fn add_players(&mut self, count: usize) {
+        self.players.clear();
+        for _ in 0..count {
+            let player = Player::new();
+            self.players.push(player);
+        }
+    }
+
     // ajouter fonctionnalité recuperer les cartes utilisés et au bout d'un moment les réutiliser sinon le deck sera vide
     // ajouter fonctionnalité pour relancer une partie des que la partie precedente est fini
-    // ajouter fonctionnalité pour afficher les gains et les pertes des joueurs
+    // gérer les gains et les pertes des joueurs ainsi que celle de la banque du croupier
     // ajouter fonctionnalité pour gérer les mises des joueurs
     // ajoute fonctionnalité de temps avec un timer pour prise de décision des joueurs
     // utiliser ratatui pour avoir une interface utilisateur
+    // compteur de joueur avec blackjack, si le croupier a blackjack aussi il y a égalité
 
 }
 pub fn test(){
