@@ -53,7 +53,7 @@ fn main() {
         }
     }
     ratatui::restore();
-    blackjack::test();
+    //blackjack::test();
     let app = App::new();
 }
 

@@ -1,8 +1,6 @@
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::{io::{self, Write}, ops::Index};
-use crossterm::event::{read, Event, KeyCode, KeyEventKind};
-use std::{thread, time};
+
 
 
 #[derive(Debug, PartialEq)]
@@ -23,14 +21,6 @@ pub struct Card {
 impl Card {
     pub fn new(value: Value, color: Color) -> Self {
         Self { value, color }
-    }
-
-    pub fn value(&self) -> &Value {
-        &self.value
-    }
-
-    pub fn color(&self) -> &Color {
-        &self.color
     }
 }
 
@@ -78,7 +68,7 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn to_int(self) -> u8 {
+    pub fn to_int(&self) -> u8 {
         match self {
             Self::Ace => 1,
             Self::Two => 2,
@@ -114,12 +104,11 @@ impl Value {
 #[derive(Debug)]
 pub struct Deck {
     pub cards: Vec<Card>,
-    pub length: usize,
     pub discarded: Vec<Card>,
 }
 
 impl Deck {
-    fn initialize_deck() -> Self {
+    pub fn initialize_deck() -> Self {
         let colors = vec![
             Color::Hearts,
             Color::Diamonds,
@@ -131,40 +120,36 @@ impl Deck {
             Value::Seven, Value::Eight, Value::Nine, Value::Ten,
             Value::Jack, Value::Queen, Value::King,
         ];
-        let mut deck = Deck {
-            cards: Vec::new(),
-            length: 0,
-            discarded: Vec::new()
-        };
+        let mut cards = Vec::with_capacity(6 * 52);
         for _ in 0..6 { // 6 jeux de 52 cartes
             for color in &colors {
                 for value in &values {
-                    deck.cards.push(Card { value: value.clone(), color: color.clone() });
-                    deck.length += 1;
+                    cards.push(Card { value: value.clone(), color: color.clone() });
                 }
             }
         }
-        deck
+        Deck {cards, discarded: Vec::new()}
     }
 
     pub fn shuffle(&mut self) {
-        println!("Mélange du deck...");
         let mut rng = thread_rng();
         self.cards.shuffle(&mut rng);
     }
 
-
+    /// Tire une carte (si le paquet est vide, on replace les cartes défaussées)
     fn draw(&mut self) -> Option<Card> {
-        if self.length == 0 {
-            println!("Le deck est vide, on réutilise les cartes précédemment jouées !");
+        if self.cards.is_empty() {
+            if self.discarded.is_empty(){
+                return None
+            }
+            // récupère les cartes défaussées, mélange et continue
             self.cards.append(&mut self.discarded);
             self.shuffle();
-            self.length = self.cards.len();
         }
-        self.length -= 1;
         self.cards.pop()
     }
 
+    /// déplace les cartes d'une main vers discarded et vide la main
     pub fn discard_hand(&mut self, hand: &mut Hand) {
         self.discarded.append(&mut hand.cards);
         hand.clear();
@@ -177,15 +162,16 @@ pub struct Hand {
 }
 
 impl Hand {
+    pub fn new() -> Self {
+        Self { cards: Vec::new() }
+    }
+
     pub fn cards(&self) -> &Vec<Card> {
         &self.cards
     }
 
-    fn new() -> Self {
-        Self { cards: Vec::new() }
-    }
 
-    fn add_card(&mut self, card: Card) {
+    pub fn add_card(&mut self, card: Card) {
         self.cards.push(card);
     }
 
@@ -204,27 +190,31 @@ impl Hand {
         somme
     }
 
-    fn show_value(&self) -> u8 {
+    pub fn show_value(&self) -> u8 {
         let value = self.value();
-        println!("{}: [{}]", value, self.cards.iter().map(|c| format!("{:?} of {:?}", c.value, c.color)).collect::<Vec<String>>().join(", "));
+        //println!("{}: [{}]", value, self.cards.iter().map(|c| format!("{:?} of {:?}", c.value, c.color)).collect::<Vec<String>>().join(", "));
         value
     }
 
-    fn show_value_dealer(&self) -> u8 {
+    pub fn show_value_dealer(&self) -> u8 {
         if let Some(card) = self.cards.first() {
-            let val = card.value.clone().to_int();
-            println!("{} + ?: [{:?} of {:?} + ?]", val, card.value, card.color);
-            val
+            card.value.to_int()
         } else {
-            println!("Main vide");
             0
         }
     }
 
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.cards.clear();
     }
 
+    pub fn is_blackjack(&self) -> bool {
+        self.cards.len() == 2 && self.value() == 21
+    }
+    
+    pub fn is_bust(&self) -> bool {
+        self.value() > 21
+    }
 }
 
 #[derive(Debug)]
@@ -241,6 +231,14 @@ pub struct Player {
     pub bet: u32,
     pub who: Who,
     pub win: i8, // -1 = perdu, 0 = égalité, 1 = gagné, 2 = blackjack
+    pub finished: bool,
+}
+
+pub enum PlayerActionResult {
+    Continue(u8),    // valeur de la main
+    Bust(u8),        // dépassé 21
+    Blackjack,       // exactement 21
+    InvalidAction,   // ne peut pas jouer
 }
 
 impl Player {
@@ -251,20 +249,28 @@ impl Player {
             bet: 10,
             who: Who::Player,
             win: 0,
+            finished: false,
         }
     }
 
     pub fn reset(&mut self) {
         self.hand.clear();
         self.win = 0;
+        self.finished = false
     }
 
     pub fn set_bet(&mut self, amount: u32) {
-        self.bet = amount
+        if amount <= self.bank {
+            self.bet = amount;
+        }
     }
 
     pub fn show_updated_player_bank(&self){
         println!("{}", self.bank)
+    }
+
+    pub fn reset_for_new_round(&mut self) {
+        self.reset();
     }
 }
 #[derive(Debug)]
@@ -273,6 +279,12 @@ pub struct Dealer {
     pub bank: u32,
     pub who: Who,
 }
+
+pub enum DealerActionResult {
+        Continue(u8),
+        Stand(u8),
+        Bust(u8),
+    }
 
 impl Dealer {
     pub fn new() -> Self {
@@ -284,8 +296,6 @@ impl Dealer {
     }
 }
 
-
-
 #[derive(Debug)]
 pub struct Game {
     pub deck: Deck,
@@ -295,41 +305,44 @@ pub struct Game {
 
 impl Game {
     pub fn new() -> Self {
-        let deck = Deck::initialize_deck();
+        let mut deck = Deck::initialize_deck();
+        deck.shuffle();
         let players = Vec::new();
         let dealer = Dealer::new();
         Self { deck, players, dealer}
     }
 
-    pub fn ask_initial_bets(&mut self) {
-        println!("\n--- Mise initiale des joueurs ---");
-        for (i, player) in self.players.iter_mut().enumerate() {
-            loop {
-                print!("Entrez la mise pour le joueur {} (entre 10 et 100): ", i + 1);
-                io::stdout().flush().unwrap();
-                let mut input = String::new();
-                io::stdin().read_line(&mut input).unwrap();
-                if let Ok(bet) = input.trim().parse::<u32>() {
-                    if bet >= 10 && bet <= 100 && bet <= self.dealer.bank {
-                        player.bet = bet;
-                        self.dealer.bank -= bet; // retirer la mise de la banque du croupier
-                        break;
-                    }
-                }
-                println!("Mise invalide. Veuillez entrer un montant valide et disponible dans la banque du dealer.");
-            }
+    pub fn create_players(&mut self, count: usize) -> Result<(), String> {
+        self.players.clear();
+        if count < 1 || count > 7 {
+            return Err("Nombre de joueurs invalide".to_string());
         }
-        println!("Toutes les mises ont été placées !");
+        for _ in 0..count{
+            self.players.push(Player::new())
+        }
+        Ok(())
+    }
+    
+    pub fn set_player_bet(&mut self, player_index: usize, amount: u32) -> Result<(), String> {
+        if player_index >= self.players.len() {
+            return Err("Invalid player index".to_string());
+        }
+        if amount > self.players[player_index].bank {
+            Err("Bet amount superior to player's bank".to_string())
+        } else {
+            self.players[player_index].bet = amount;
+            Ok(())
+        }
     }
 
     pub fn deal_cards(&mut self) {
         // Nettoyer les mains précédentes
         for player in &mut self.players {
-            player.hand.clear();
-            player.win = 0; // reset état du joueur
+            player.reset()
         }
         self.dealer.hand.clear();
-        println!("\nDistribution des cartes...\n");
+
+        // Distribution des cartes
         for _ in 0..2 {
             for player in &mut self.players {
                 if let Some(card) = self.deck.draw() {
@@ -341,172 +354,111 @@ impl Game {
             }
         }
     }
-
-    fn show_hands(&self) {
-        for player in &self.players {
-            player.hand.show_value();
+    
+    pub fn can_player_play(&self, player_index: usize) -> bool {
+        if player_index >= self.players.len() {
+            return false;
         }
-        self.dealer.hand.show_value_dealer();
+        let p = &self.players[player_index];
+        (!p.finished) && !p.hand.is_bust() && !p.hand.is_blackjack()
     }
+    
+    pub fn player_hit(&mut self, player_index: usize) -> PlayerActionResult {
+        self.players[player_index].hand.hit_cards(&mut self.deck);
+        let player_hand_value = self.players[player_index].hand.value();
 
-    fn ask_nb_players(&mut self) {
-        // Demande du nombre de joueur
-        let num_players = loop {
-            print!("Combien de joueurs ? (1-7): ");
-            io::stdout().flush().unwrap();
-            let mut input = String::new();
-            io::stdin().read_line(&mut input).unwrap();
-            if let Ok(n) = input.trim().parse::<usize>() {
-                if n >= 1 && n <= 7 {
-                    break n;
-                }
-            }
-            println!("Entrée invalide. Veuillez entrer un nombre entre 1 et 7.");
-        };
-        
-        // Création du nombre de joueurs
-        for _ in 0..num_players {
-            let player = Player::new();
-            self.players.push(player);
-        }
-        thread::sleep(time::Duration::from_secs(1));
-    }
-
-    fn players_turns(&mut self) {
-        self.dealer.hand.show_value_dealer();
-        println!("\n\nAppuie sur 't' pour tirer ou 'r' pour rester :");
-        for (i, player) in &mut self.players.iter_mut().enumerate() {
-            println!("\nMain du joueur {}:", i + 1);
-            player.hand.show_value();
-            loop {
-                if let Event::Key(event) = read().unwrap() {
-                    if event.kind == KeyEventKind::Press {
-                        match event.code {
-                            KeyCode::Char('t') => {
-                                player.hand.hit_cards(&mut self.deck);
-                                player.hand.show_value();
-                                if player.hand.value() > 21 {
-                                    println!("\nTour terminé");
-                                    println!("Vous avez dépassé 21, vous perdez.");
-                                    thread::sleep(time::Duration::from_secs(2));
-                                    break;
-                                } else {
-                                    continue
-                                }
-                            }
-                            KeyCode::Char('r') => {
-                                player.hand.show_value();
-                                println!("Tour terminé\n");
-                            
-                                break;
-                            }
-                            _ => {}
-                        }
-                        if player.hand.value() == 21 {
-                            println!("BLACKJACK 🤑💰💲");
-                            player.win = 2;
-                            break;
-                        }
-                        continue;
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn dealer_turn(&mut self) {
-        println!("\n\nMain du dealer:");
-        self.dealer.hand.show_value();
-
-        
-        // 1) Marquer immédiatement les joueurs qui ont déjà busté
-        for player in &mut self.players {
-            if player.hand.value() > 21 && player.win == 0 {
-                player.win = -1;
-                // Appliquer le résultat directement ici
-                match player.win {
-                    -1 => { /* déjà perdu, rien à ajouter */ }
-                    0 => { player.bank += player.bet; }
-                    1 => { player.bank += 2 * player.bet; }
-                    2 => { player.bank += (player.bet * 5) / 2; }
-                    _ => {}
-                }
-    }
-}
-
-        // Si tout le monde a perdu -> on s'arrête
-        if self.players.iter().all(|p| p.win == -1) {
-            println!("Tous les joueurs ont perdu. Le dealer n'a pas besoin de jouer.");
-            return;
-        }
-
-        // Tour du croupier
-        loop {
-            let dealer_value = self.dealer.hand.value();
-
-            if dealer_value < 17 {
-                self.dealer.hand.hit_cards(&mut self.deck);
-                self.dealer.hand.show_value();
-                thread::sleep(time::Duration::from_secs(1));
-            } else if dealer_value > 21 {
-                println!("Le dealer a dépassé 21, il a perdu.");
-                for player in self.players.iter_mut() {
-                    if player.win == 0 { // joueur encore "en lice"
-                        player.win = 1;
-                    }
-                }
-                break;
-            } else if dealer_value == 21 {
-                println!("Le dealer a 21 !");
-                for player in self.players.iter_mut() {
-                    if player.win == 0 { // joueur encore "en lice"
-                        if player.hand.value() == 21 {
-                            player.win = 0; // égalité
-                        } else {
-                            player.win = -1; // perdu
-                        }
-                    }
-                }
-                break;
-            } else { // dealer_value >= 17 && dealer_value < 21
-                println!("Main finale du dealer:");
-                self.dealer.hand.show_value();
-                thread::sleep(time::Duration::from_secs(1));
-
-                println!("\nRésultats:");
-                for (i, player) in self.players.iter_mut().enumerate() {
-                    if player.win != 0 {
-                        continue; // déjà fixé (blackjack, bust, etc.)
-                    }
-                    if player.hand.value() > dealer_value && player.hand.value() <= 21 {
-                        println!("Le joueur {} a gagné contre le dealer.", i + 1);
-                        player.win = 1;
-                    } else if player.hand.value() < dealer_value {
-                        println!("Le dealer a gagné contre le joueur {}.", i + 1);
-                        player.win = -1;
-                    } else {
-                        println!("Égalité entre le dealer et le joueur {}.", i + 1);
-                        player.win = 0;
-                    }
-                }
-                break;
-            }
-        }
-
-        println!("\nFin de la partie.");
-        self.apply_results();
-        for (i, player) in &mut self.players.iter_mut().enumerate() {
-            println!("Bank du joueur {}", i  + 1);
-            player.show_updated_player_bank();
+        if player_hand_value > 21 {
+            self.players[player_index].win = -1;
+            PlayerActionResult::Bust(player_hand_value)
+        } else if  player_hand_value == 21{
+            self.players[player_index].win = 2;
+            PlayerActionResult::Blackjack
+        } else {
+            PlayerActionResult::Continue(player_hand_value)
         }
     }
     
-    pub fn add_players(&mut self, count: usize) {
-        self.players.clear();
-        for _ in 0..count {
-            let player = Player::new();
-            self.players.push(player);
+    pub fn player_stand(&mut self, player_index: usize) {
+         if let Some(p) = self.players.get_mut(player_index) {
+            p.finished = true;
         }
+    }
+
+    
+    pub fn dealer_turn(&mut self) {
+        while self.should_dealer_hit() {
+            self.dealer.hand.hit_cards(&mut self.deck);
+        }
+    }
+
+    pub fn reveal_dealer_cards(&mut self) {
+        self.dealer.hand.show_value();
+    }
+    
+    pub fn should_dealer_hit(&self) -> bool {
+        self.dealer.hand.value() < 17
+    }
+    
+    pub fn dealer_hit(&mut self) -> DealerActionResult {
+        self.dealer.hand.hit_cards(&mut self.deck);
+        let dealer_hand_value = self.dealer.hand.value();
+
+        if dealer_hand_value < 17{
+            DealerActionResult::Continue(dealer_hand_value)
+        } else if dealer_hand_value >= 17 || dealer_hand_value < 22 {
+            DealerActionResult::Stand(dealer_hand_value)
+        } else {
+            DealerActionResult::Bust(dealer_hand_value)
+        }
+    }
+    
+    pub fn calculate_final_results(&mut self) {
+        let dealer_val = self.dealer.hand.value();
+        let dealer_bust = dealer_val > 21;
+
+        for player in self.players.iter_mut() {
+            let player_val = player.hand.value();
+
+            if player.hand.is_blackjack() && self.dealer.hand.is_blackjack() {
+                player.win = 0; // égalité
+            } else if player.hand.is_blackjack() {
+                player.win = 2; // blackjack
+            } else if dealer_bust && !player.hand.is_bust() {
+                player.win = 1; // dealer bust
+            } else if player.hand.is_bust() {
+                player.win = -1; // joueur bust
+            } else if player_val > dealer_val {
+                player.win = 1;
+            } else if player_val < dealer_val {
+                player.win = -1;
+            } else {
+                player.win = 0; // égalité
+            }
+        }
+    }
+    
+    pub fn get_round_results(&self) -> Vec<(usize, i8, u32)> {
+        self.players
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let gain = match p.win {
+                    -1 => -(p.bet as i32),
+                    0 => 0,
+                    1 => p.bet as i32,
+                    2 => (p.bet as i32 * 3) / 2,
+                    _ => 0,
+                };
+                (i, p.win, gain as u32)
+            })
+            .collect()
+    }
+    pub fn discard_all_hands(&mut self) {
+        for player in &mut self.players {
+            self.deck.discard_hand(&mut player.hand);
+            player.reset();
+        }
+        self.deck.discard_hand(&mut self.dealer.hand);
     }
 
     pub fn apply_results(&mut self) {
@@ -522,94 +474,32 @@ impl Game {
         }
     }
 
-    pub fn discard_all_hands(&mut self) {
-        for player in &mut self.players {
-            self.deck.discard_hand(&mut player.hand);
-        }
-        self.deck.discard_hand(&mut self.dealer.hand);
+    // --- GETTERS utiles pour l'UI ---
+    pub fn get_player_hand(&self, index: usize) -> Option<&Hand> {
+        Some(&self.players.get(index).unwrap().hand)
     }
-
-    pub fn play_round(&mut self) {
-        self.deck.shuffle();
-        self.ask_initial_bets();
-        self.deal_cards();
-        self.players_turns();
-        self.dealer_turn();
-        self.discard_all_hands(); // remet les cartes jouées dans discarded
-
-        loop {
-            print!("Voulez-vous relancer une autre partie ? (o/n) : ");
-            io::stdout().flush().unwrap();
-            let mut input = String::new();
-            io::stdin().read_line(&mut input).unwrap();
-            match input.trim().to_lowercase().as_str() {
-                "o" => break self.play_round(),
-                "n" => {
-                    println!("Fin de la session de jeu !");
-                    return;
-                },
-                _ => println!("Entrée invalide"),
-            }
-        }
-    }
-
-    pub fn play_next_round(&mut self) {
-        println!("\n\n\n\n\n\n\n\n\n\n\n\n--- Nouveau tour ---");
-
-        // Remettre les cartes jouées dans le deck
-        self.discard_all_hands();
-
-        // Réinitialiser les joueurs (mais conserver la mise)
-        for player in &mut self.players {
-            player.win = 0;
-        }
-
-        // Rejouer le tour
-        self.deck.shuffle();
-        self.deal_cards();
-        self.players_turns();
-        self.dealer_turn();
-    }
-}
-
-    // ajoute fonctionnalité de temps avec un timer pour prise de décision des joueurs
-    // utiliser ratatui pour avoir une interface utilisateur
-    // compteur de joueur avec blackjack, si le croupier a blackjack aussi il y a égalité
-
-pub fn test(){
-    let mut game = Game::new();
     
-    game.ask_nb_players();  // nombre de joueurs
-    game.ask_initial_bets(); // mises initiales
-
-    loop {
-        thread::sleep(time::Duration::from_secs(1));
-        game.play_next_round();
-
-        // Vérifie si tous les joueurs ou le dealer sont à sec
-        if game.players.iter().all(|p| p.bank == 0) {
-            println!("Tous les joueurs sont à court d'argent !");
-            break;
-        }
-        if game.dealer.bank == 0 {
-            println!("Le dealer est à court d'argent !");
-            break;
-        }
-
-        println!("Recommence automatiquement le prochain tour avec les mêmes mises...");
-        thread::sleep(time::Duration::from_secs(2));
+    pub fn get_dealer_hand(&self) -> &Hand {
+        &self.dealer.hand
     }
-
-    println!("Fin de la session !");
-}
-
-pub fn main() {
-    let mut game = Game::new();
     
-    game.ask_nb_players();  // nombre de joueurs
-    game.play_round();       // lance le premier tour et propose de relancer
+    pub fn get_dealer_visible_value(&self) -> u8 {
+        if let Some(card) = self.dealer.hand.cards.first() {
+            let val = card.value.clone().to_int();
+            val
+        } else {
+            0
+        }
+    }
+    
+    pub fn get_player_count(&self) -> usize {
+        self.players.len()
+    }
+    
+    pub fn is_all_players_done(&self) -> bool {
+        self.players.iter().all(|p| p.win != 0 || p.hand.is_bust() || p.hand.is_blackjack())
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -617,7 +507,7 @@ mod tests {
     #[test]
     fn test_deck_initialization() {
         let deck = Deck::initialize_deck();
-        assert_eq!(deck.length, 312);
+        assert_eq!(deck.cards.len(), 312);
     }
 
     #[test]
