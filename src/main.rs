@@ -32,6 +32,16 @@ impl App{
             show_dealer_cards: false,
         }
     }
+
+    fn status_message(&self) -> String {
+        match self.game_state {
+            GameState::Setup => "Appuyez sur 'n' pour commencer".to_string(),
+            GameState::DealingCards => "Distribution des cartes".to_string(),
+            GameState::PlayersTurn => format!("Tour du joueur {}", self.current_player + 1),
+            GameState::DealerTurn => "Tour du croupier...".to_string(),
+            GameState::Result => "Partie terminée. Appuyez sur 'r' pour rejouer".to_string(),
+        }
+    }
 }
 
 fn main() {
@@ -44,6 +54,7 @@ fn main() {
     }
     ratatui::restore();
     blackjack::test();
+    let app = App::new();
 }
 
 

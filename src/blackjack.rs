@@ -4,13 +4,14 @@ use std::{io::{self, Write}, ops::Index};
 use crossterm::event::{read, Event, KeyCode, KeyEventKind};
 use std::{thread, time};
 
+
 #[derive(Debug, PartialEq)]
 pub enum GameState {
-    Setup,
-    Betting,
-    Playing,
-    DealerTurn,
-    GameOver,
+    Setup, // Number of players and the bet amount for each
+    DealingCards, // Cards distribution with animation on TUI
+    PlayersTurn, // Players choose to stay or hit a card
+    DealerTurn, // Show the 2nd card of the dealer and has to hit if less than 16
+    Result, // Result who lost / win and restart the game with same bet amount
 }
 
 #[derive(Debug, Clone)]
@@ -20,7 +21,7 @@ pub struct Card {
 }
 
 impl Card {
-    fn new(value: Value, color: Color) -> Self {
+    pub fn new(value: Value, color: Color) -> Self {
         Self { value, color }
     }
 
@@ -40,6 +41,25 @@ pub enum Color {
     Clubs,
     Spades,
 }
+
+impl Color {
+    pub fn to_symbol(&self) -> &str {
+        match self {
+            Color::Hearts => "♥",
+            Color::Diamonds => "♦", 
+            Color::Clubs => "♣",
+            Color::Spades => "♠",
+        }
+    }
+    
+    pub fn to_color(&self) -> ratatui::style::Color {
+        match self {
+            Color::Hearts | Color::Diamonds => ratatui::style::Color::Red,
+            Color::Clubs | Color::Spades => ratatui::style::Color::White,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Ace,
@@ -69,7 +89,25 @@ impl Value {
             Self::Seven => 7,
             Self::Eight => 8,
             Self::Nine => 9,
-            other => 10
+            _other => 10
+        }
+    }
+    
+    pub fn to_string(&self) -> &str {
+        match self {
+            Value::Ace => "A",
+            Value::Two => "2",
+            Value::Three => "3",
+            Value::Four => "4", 
+            Value::Five => "5",
+            Value::Six => "6",
+            Value::Seven => "7",
+            Value::Eight => "8",
+            Value::Nine => "9",
+            Value::Ten => "10",
+            Value::Jack => "J",
+            Value::Queen => "Q",
+            Value::King => "K",
         }
     }
 }
@@ -77,6 +115,7 @@ impl Value {
 pub struct Deck {
     pub cards: Vec<Card>,
     pub length: usize,
+    pub discarded: Vec<Card>,
 }
 
 impl Deck {
@@ -95,6 +134,7 @@ impl Deck {
         let mut deck = Deck {
             cards: Vec::new(),
             length: 0,
+            discarded: Vec::new()
         };
         for _ in 0..6 { // 6 jeux de 52 cartes
             for color in &colors {
@@ -116,11 +156,18 @@ impl Deck {
 
     fn draw(&mut self) -> Option<Card> {
         if self.length == 0 {
-            None
-        } else {
-            self.length -= 1;
-            self.cards.pop()
+            println!("Le deck est vide, on réutilise les cartes précédemment jouées !");
+            self.cards.append(&mut self.discarded);
+            self.shuffle();
+            self.length = self.cards.len();
         }
+        self.length -= 1;
+        self.cards.pop()
+    }
+
+    pub fn discard_hand(&mut self, hand: &mut Hand) {
+        self.discarded.append(&mut hand.cards);
+        hand.clear();
     }
 }
 
@@ -190,19 +237,34 @@ pub enum Who {
 #[derive(Debug)]
 pub struct Player {
     pub hand: Hand,
-    pub money: u32,
+    pub bank: u32,
     pub bet: u32,
     pub who: Who,
+    pub win: i8, // -1 = perdu, 0 = égalité, 1 = gagné, 2 = blackjack
 }
 
 impl Player {
     pub fn new() -> Self {
         Self {
             hand: Hand::new(),
-            money: 1000,
+            bank: 1000,
             bet: 10,
             who: Who::Player,
+            win: 0,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.hand.clear();
+        self.win = 0;
+    }
+
+    pub fn set_bet(&mut self, amount: u32) {
+        self.bet = amount
+    }
+
+    pub fn show_updated_player_bank(&self){
+        println!("{}", self.bank)
     }
 }
 #[derive(Debug)]
@@ -229,7 +291,6 @@ pub struct Game {
     pub deck: Deck,
     pub players: Vec<Player>,
     pub dealer: Dealer,
-    pub counter: u32
 }
 
 impl Game {
@@ -237,15 +298,37 @@ impl Game {
         let deck = Deck::initialize_deck();
         let players = Vec::new();
         let dealer = Dealer::new();
-        let mut counter = 0;
-        Self { deck, players, dealer, counter }
+        Self { deck, players, dealer}
+    }
+
+    pub fn ask_initial_bets(&mut self) {
+        println!("\n--- Mise initiale des joueurs ---");
+        for (i, player) in self.players.iter_mut().enumerate() {
+            loop {
+                print!("Entrez la mise pour le joueur {} (entre 10 et 100): ", i + 1);
+                io::stdout().flush().unwrap();
+                let mut input = String::new();
+                io::stdin().read_line(&mut input).unwrap();
+                if let Ok(bet) = input.trim().parse::<u32>() {
+                    if bet >= 10 && bet <= 100 && bet <= self.dealer.bank {
+                        player.bet = bet;
+                        self.dealer.bank -= bet; // retirer la mise de la banque du croupier
+                        break;
+                    }
+                }
+                println!("Mise invalide. Veuillez entrer un montant valide et disponible dans la banque du dealer.");
+            }
+        }
+        println!("Toutes les mises ont été placées !");
     }
 
     pub fn deal_cards(&mut self) {
-        // Nettoyage les mains précédentes
+        // Nettoyer les mains précédentes
         for player in &mut self.players {
             player.hand.clear();
+            player.win = 0; // reset état du joueur
         }
+        self.dealer.hand.clear();
         println!("\nDistribution des cartes...\n");
         for _ in 0..2 {
             for player in &mut self.players {
@@ -314,13 +397,14 @@ impl Game {
                             KeyCode::Char('r') => {
                                 player.hand.show_value();
                                 println!("Tour terminé\n");
-                                self.counter += 1;
+                            
                                 break;
                             }
                             _ => {}
                         }
                         if player.hand.value() == 21 {
                             println!("BLACKJACK 🤑💰💲");
+                            player.win = 2;
                             break;
                         }
                         continue;
@@ -330,52 +414,93 @@ impl Game {
         }
     }
 
-    pub fn dealer_turn(&mut self){
+    pub fn dealer_turn(&mut self) {
         println!("\n\nMain du dealer:");
         self.dealer.hand.show_value();
+
+        
+        // 1) Marquer immédiatement les joueurs qui ont déjà busté
+        for player in &mut self.players {
+            if player.hand.value() > 21 && player.win == 0 {
+                player.win = -1;
+                // Appliquer le résultat directement ici
+                match player.win {
+                    -1 => { /* déjà perdu, rien à ajouter */ }
+                    0 => { player.bank += player.bet; }
+                    1 => { player.bank += 2 * player.bet; }
+                    2 => { player.bank += (player.bet * 5) / 2; }
+                    _ => {}
+                }
+    }
+}
+
+        // Si tout le monde a perdu -> on s'arrête
+        if self.players.iter().all(|p| p.win == -1) {
+            println!("Tous les joueurs ont perdu. Le dealer n'a pas besoin de jouer.");
+            return;
+        }
+
+        // Tour du croupier
         loop {
-            // si counter = 0, tout les joueurs ont perdu et le dealer n'a pas besoin de jouer
-            if self.counter == 0 {
-                println!("Tous les joueurs ont perdu. Le dealer n'a pas besoin de jouer.");
-                break;
-            }
-            // si counter supérieur à 0
-            // si la valeur de sa main est inférieur à 17 il doit tirer
-            if self.counter > 0 && self.dealer.hand.value() < 17 {
+            let dealer_value = self.dealer.hand.value();
+
+            if dealer_value < 17 {
                 self.dealer.hand.hit_cards(&mut self.deck);
                 self.dealer.hand.show_value();
                 thread::sleep(time::Duration::from_secs(1));
-            } else if self.dealer.hand.value() > 21 {// si la valeur de sa main dépasse 21, le dealer a perdu
+            } else if dealer_value > 21 {
                 println!("Le dealer a dépassé 21, il a perdu.");
-                break;
-            } else if self.dealer.hand.value() == 21 { // si la valeur de sa main est 21, le dealer a gagné, si aucun autre joueur à 21
-                println!("Le dealer a 21, il a gagné.");
-                break;
-            } else if self.dealer.hand.value() >= 17 && self.dealer.hand.value() < 21 { // si la valeur de sa main est sup 16 et inférieur à 21, le dealer reste
-                println!("Main final du dealer:");
-                self.dealer.hand.show_value();
-                thread::sleep(time::Duration::from_secs(1));
-                println!("\nRésultats:");
-                for (i, player) in (&self.players).iter().enumerate() {
-                    if player.hand.value() > self.dealer.hand.value() && player.hand.value() <= 21 {
-                        println!("\nLe joueur {} a gagné contre le dealer.", i+1);
-                    } else if player.hand.value() < self.dealer.hand.value() && self.dealer.hand.value() <= 21 {
-                        println!("\nLe dealer a gagné contre le joueur {}.", i+1);
-                        self.counter -= 1;
-                    } else if player.hand.value() == self.dealer.hand.value() {
-                        println!("\nÉgalité entre le dealer et le joueur {}.", i+1);
+                for player in self.players.iter_mut() {
+                    if player.win == 0 { // joueur encore "en lice"
+                        player.win = 1;
                     }
                 }
                 break;
-            } 
-        }
-        println!("\nFin de la partie.");
-        for player in &mut self.players {
-            player.hand.clear();
-        }
-        self.dealer.hand.clear();
-    }
+            } else if dealer_value == 21 {
+                println!("Le dealer a 21 !");
+                for player in self.players.iter_mut() {
+                    if player.win == 0 { // joueur encore "en lice"
+                        if player.hand.value() == 21 {
+                            player.win = 0; // égalité
+                        } else {
+                            player.win = -1; // perdu
+                        }
+                    }
+                }
+                break;
+            } else { // dealer_value >= 17 && dealer_value < 21
+                println!("Main finale du dealer:");
+                self.dealer.hand.show_value();
+                thread::sleep(time::Duration::from_secs(1));
 
+                println!("\nRésultats:");
+                for (i, player) in self.players.iter_mut().enumerate() {
+                    if player.win != 0 {
+                        continue; // déjà fixé (blackjack, bust, etc.)
+                    }
+                    if player.hand.value() > dealer_value && player.hand.value() <= 21 {
+                        println!("Le joueur {} a gagné contre le dealer.", i + 1);
+                        player.win = 1;
+                    } else if player.hand.value() < dealer_value {
+                        println!("Le dealer a gagné contre le joueur {}.", i + 1);
+                        player.win = -1;
+                    } else {
+                        println!("Égalité entre le dealer et le joueur {}.", i + 1);
+                        player.win = 0;
+                    }
+                }
+                break;
+            }
+        }
+
+        println!("\nFin de la partie.");
+        self.apply_results();
+        for (i, player) in &mut self.players.iter_mut().enumerate() {
+            println!("Bank du joueur {}", i  + 1);
+            player.show_updated_player_bank();
+        }
+    }
+    
     pub fn add_players(&mut self, count: usize) {
         self.players.clear();
         for _ in 0..count {
@@ -384,26 +509,105 @@ impl Game {
         }
     }
 
-    // ajouter fonctionnalité recuperer les cartes utilisés et au bout d'un moment les réutiliser sinon le deck sera vide
-    // ajouter fonctionnalité pour relancer une partie des que la partie precedente est fini
-    // gérer les gains et les pertes des joueurs ainsi que celle de la banque du croupier
-    // ajouter fonctionnalité pour gérer les mises des joueurs
+    pub fn apply_results(&mut self) {
+        for player in &mut self.players {
+            player.bank -= player.bet;
+            match player.win {
+                -1 => { /* perdu : mise déjà retirée dans initial_bet() */ }
+                0 => { player.bank += player.bet; }        // égalité : récupère sa mise
+                1 => { player.bank += 2 * player.bet; }    // gagné : double la mise
+                2 => { player.bank += (player.bet * 5) / 2; } // blackjack : 2.5x la mise
+                _ => {}
+            }
+        }
+    }
+
+    pub fn discard_all_hands(&mut self) {
+        for player in &mut self.players {
+            self.deck.discard_hand(&mut player.hand);
+        }
+        self.deck.discard_hand(&mut self.dealer.hand);
+    }
+
+    pub fn play_round(&mut self) {
+        self.deck.shuffle();
+        self.ask_initial_bets();
+        self.deal_cards();
+        self.players_turns();
+        self.dealer_turn();
+        self.discard_all_hands(); // remet les cartes jouées dans discarded
+
+        loop {
+            print!("Voulez-vous relancer une autre partie ? (o/n) : ");
+            io::stdout().flush().unwrap();
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).unwrap();
+            match input.trim().to_lowercase().as_str() {
+                "o" => break self.play_round(),
+                "n" => {
+                    println!("Fin de la session de jeu !");
+                    return;
+                },
+                _ => println!("Entrée invalide"),
+            }
+        }
+    }
+
+    pub fn play_next_round(&mut self) {
+        println!("\n\n\n\n\n\n\n\n\n\n\n\n--- Nouveau tour ---");
+
+        // Remettre les cartes jouées dans le deck
+        self.discard_all_hands();
+
+        // Réinitialiser les joueurs (mais conserver la mise)
+        for player in &mut self.players {
+            player.win = 0;
+        }
+
+        // Rejouer le tour
+        self.deck.shuffle();
+        self.deal_cards();
+        self.players_turns();
+        self.dealer_turn();
+    }
+}
+
     // ajoute fonctionnalité de temps avec un timer pour prise de décision des joueurs
     // utiliser ratatui pour avoir une interface utilisateur
     // compteur de joueur avec blackjack, si le croupier a blackjack aussi il y a égalité
 
-}
 pub fn test(){
     let mut game = Game::new();
-    game.deck.shuffle();
-    game.ask_nb_players();
-    game.deal_cards();
-    game.players_turns();
-    game.dealer_turn();
+    
+    game.ask_nb_players();  // nombre de joueurs
+    game.ask_initial_bets(); // mises initiales
+
+    loop {
+        thread::sleep(time::Duration::from_secs(1));
+        game.play_next_round();
+
+        // Vérifie si tous les joueurs ou le dealer sont à sec
+        if game.players.iter().all(|p| p.bank == 0) {
+            println!("Tous les joueurs sont à court d'argent !");
+            break;
+        }
+        if game.dealer.bank == 0 {
+            println!("Le dealer est à court d'argent !");
+            break;
+        }
+
+        println!("Recommence automatiquement le prochain tour avec les mêmes mises...");
+        thread::sleep(time::Duration::from_secs(2));
+    }
+
+    println!("Fin de la session !");
 }
 
-fn main() {
-    test();
+pub fn main() {
+    let mut game = Game::new();
+    
+    game.ask_nb_players();  // nombre de joueurs
+    game.play_round();       // lance le premier tour et propose de relancer
 }
 
 
@@ -444,4 +648,5 @@ mod tests {
         player.hand.add_card(Card::new(Value::King, Color::Spades));
         assert_eq!(player.hand.show_value(), 21);
     }
+
 }
